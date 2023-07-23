@@ -3,11 +3,14 @@ Rust library and command line interface for controlling Razer devices on Linux
 
 ## About
 With this library, you can print info for all connected Razer peripherals,
-including connected devices and configure device properties. There is also a
-command line interface based on
+including connected devices and configure device properties.
+
+There is also a command line interface based on
 [`razer-cli`](https:/github.com/LoLei/razer-cli) which uses the library to
 display all Razer peripheral properties and allow for command line
-configuration. The library uses udev drivers directly so it is necessary to add
+configuration.
+
+The library uses udev drivers directly so it is necessary to add
 your user to `plugdev` group in order to use both the cli or any other program
 that uses the `razer-rs` lib.
 
