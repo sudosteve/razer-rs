@@ -1,9 +1,12 @@
 [package]
 name = "razer-rs"
+description = "A simple CLI tool to interact with Razer device peripherals"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.5.1", features = ["derive"] }
+phf = { version = "0.11.2", features = ["macros"] }
 udev = "0.7.0"
