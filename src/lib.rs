@@ -155,14 +155,15 @@ impl RazerDevice {
     }
 
     pub fn set_low_battery_threshold(&mut self, low_battery_threshold: u16) {
+        let low_percent = low_battery_threshold * 255 / 100;
         let _ = self
             .udev_device
-            .set_attribute_value("charge_low_threshold", low_battery_threshold.to_string());
+            .set_attribute_value("charge_low_threshold", low_percent.to_string());
     }
 
     pub fn get_idle_time(&self) -> Option<u16> {
         self.udev_device
-            .attribute_value("charge_status")
+            .attribute_value("device_idle_time")
             .map(|s| s.to_str().unwrap().parse::<u16>().unwrap())
     }
 

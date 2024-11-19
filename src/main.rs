@@ -21,7 +21,6 @@ fn main() {
         }
         if let Some(idle_delay) = args.idle_delay() {
             device.set_idle_time(idle_delay);
-            println!("{}", device.get_idle_time().unwrap());
         }
         if let Some(dpi) = args.dpi() {
             device.set_dpi(dpi);
@@ -89,6 +88,12 @@ fn print_everything(device: &RazerDevice) {
         }
         if let Some(charge_status) = charge_status {
             println!("        charging: {}", charge_status);
+        }
+        if let Some(low_battery_threshold) = device.get_low_battery_threshold() {
+            println!("        low battery threshold: {}", low_battery_threshold);
+        }
+        if let Some(idle_time) = device.get_idle_time() {
+            println!("        idle time: {}", idle_time);
         }
     }
 
