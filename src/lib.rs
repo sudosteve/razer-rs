@@ -1,17 +1,17 @@
 use std::ffi::OsStr;
-use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::u16;
 use std::vec::Vec;
+use std::{fmt};
 
 mod devices;
 
 const RAZER_VENDOR_ID: u16 = 0x1532;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub enum DeviceType {
+    #[default]
     Unknown,
     Mouse,
     Keyboard,
@@ -28,17 +28,18 @@ pub struct DeviceCapabilities {
     pub max_dpi: Option<u16>,
     pub dpi_stages: bool,
     pub poll_rate: bool,
-    pub battery: bool, // Might need to add low_threshold and idle_delay
+    pub battery: bool, // TODO: Might need to add low_threshold and idle_delay
 }
 
 pub struct RazerDevice {
+    name: String,
+    device_capabilities: Option<DeviceCapabilities>,
     udev_device: udev::Device,
-    device_capabilities: DeviceCapabilities,
 }
 
 impl RazerDevice {
     pub fn get_name(&self) -> &str {
-        self.device_capabilities.name
+        self.name.as_str()
     }
 
     pub fn get_syspath(&self) -> &str {
@@ -46,12 +47,22 @@ impl RazerDevice {
     }
 
     pub fn get_type(&self) -> DeviceType {
-        self.device_capabilities.device_type
+        self.device_capabilities
+            .as_ref()
+            .map(|d| d.device_type)
+            .unwrap_or_default()
     }
 
     pub fn get_dpi(&self) -> Option<Dpi> {
+        if self.device_capabilities.as_ref().is_some_and(|d| !d.dpi) {
+            return None;
+        }
         let dpi_str: Option<&OsStr> = self.udev_device.attribute_value("dpi");
-        if self.device_capabilities.dpi_use_xy {
+        if self
+            .device_capabilities
+            .as_ref()
+            .is_some_and(|d| d.dpi_use_xy)
+        {
             dpi_str.and_then(split_xy).map(|(x, y)| Dpi::XY(x, y))
         } else {
             dpi_str.map(|s| Dpi::Single(s.to_str().unwrap().parse::<u16>().unwrap()))
@@ -59,6 +70,9 @@ impl RazerDevice {
     }
 
     pub fn set_dpi(&mut self, dpi: u16) {
+        if self.device_capabilities.as_ref().is_some_and(|d| !d.dpi) {
+            return;
+        }
         self.set_raw_attribute_value("dpi", &dpi.to_be_bytes());
     }
 
@@ -68,11 +82,18 @@ impl RazerDevice {
         self.set_raw_attribute_value("dpi", &byte_vec);
     }
 
-    pub fn get_max_dpi(&mut self) -> Option<u16> {
-        self.device_capabilities.max_dpi
+    pub fn get_max_dpi(&self) -> Option<u16> {
+        self.device_capabilities.as_ref().and_then(|d| d.max_dpi)
     }
 
-    pub fn get_dpi_stages(&mut self) -> Option<(u8, Vec<(u16, u16)>)> {
+    pub fn get_dpi_stages(&self) -> Option<(u8, Vec<(u16, u16)>)> {
+        if self
+            .device_capabilities
+            .as_ref()
+            .is_some_and(|d| !d.dpi_stages)
+        {
+            return None;
+        }
         self.get_raw_attribute_value("dpi_stages").map(|v| {
             let mut stages: Vec<(u16, u16)> = Vec::with_capacity((v.len() - 1) / 4);
             let active_stage = v[0];
@@ -90,12 +111,26 @@ impl RazerDevice {
     }
 
     pub fn get_poll_rate(&self) -> Option<u16> {
+        if self
+            .device_capabilities
+            .as_ref()
+            .is_some_and(|d| !d.poll_rate)
+        {
+            return None;
+        }
         self.udev_device
             .attribute_value("poll_rate")
             .map(|s| s.to_str().unwrap().parse::<u16>().unwrap())
     }
 
     pub fn set_poll_rate(&mut self, dpi: u16) {
+        if self
+            .device_capabilities
+            .as_ref()
+            .is_some_and(|d| !d.poll_rate)
+        {
+            return;
+        }
         let _ = self
             .udev_device
             .set_attribute_value("poll_rate", dpi.to_string());
@@ -113,10 +148,16 @@ impl RazerDevice {
             .map(|s| s.to_str().unwrap().eq("1"))
     }
 
-    pub fn get_charge_low_threshold(&self) -> Option<u16> {
+    pub fn get_low_battery_threshold(&self) -> Option<u16> {
         self.udev_device
             .attribute_value("charge_low_threshold")
             .map(|s| s.to_str().unwrap().parse::<u16>().unwrap() * 100 / 255)
+    }
+
+    pub fn set_low_battery_threshold(&mut self, low_battery_threshold: u16) {
+        let _ = self
+            .udev_device
+            .set_attribute_value("charge_low_threshold", low_battery_threshold.to_string());
     }
 
     pub fn get_idle_time(&self) -> Option<u16> {
@@ -181,17 +222,17 @@ pub fn get_devices() -> Vec<RazerDevice> {
         let (vendor_id, device_id) = get_vendor_id_device_id(sysname);
 
         if vendor_id == RAZER_VENDOR_ID {
-            if let Some(device_type) = device.attribute_value("device_type") {
-                // let mut device_capabilities: DeviceCapabilities;
-                if let Some(device_capabilities) = devices::get_device_capabilities(device_id) {
-                    let name = String::from(device_type.to_str().unwrap());
-                    assert!(device_capabilities.name == name);
-                    // println!("Found device: {}", device_capabilities.name);
-                    result.push(RazerDevice {
-                        udev_device: device,
-                        device_capabilities,
-                    });
+            if let Some(device_name) = device.attribute_value("device_type") {
+                let name = String::from(device_name.to_str().unwrap());
+                let device_capabilities = devices::get_device_capabilities(device_id);
+                if device_capabilities.is_some() {
+                    assert!(device_capabilities.as_ref().unwrap().name == name);
                 }
+                result.push(RazerDevice {
+                    name,
+                    device_capabilities,
+                    udev_device: device,
+                });
             }
         }
     }
