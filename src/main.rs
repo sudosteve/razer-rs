@@ -32,7 +32,7 @@ fn main() {
             println!("{}", device.get_syspath());
         }
     }
-    
+
     if args.list() {
         for device in devices {
             print_everything(&device);
@@ -74,8 +74,8 @@ fn print_everything(device: &RazerDevice) {
             if let Some(poll_rate) = device.get_poll_rate() {
                 println!("        polling rate: {}", poll_rate);
             }
-        },
-        _ => todo!()
+        }
+        _ => todo!(),
     }
 
     // Print Battery section
@@ -99,4 +99,3 @@ fn print_everything(device: &RazerDevice) {
 
     // TODO: rgb stuff
 }
-

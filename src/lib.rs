@@ -1,9 +1,9 @@
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::vec::Vec;
-use std::{fmt};
 
 mod devices;
 
@@ -139,7 +139,7 @@ impl RazerDevice {
     pub fn get_charge_level(&self) -> Option<u16> {
         self.udev_device
             .attribute_value("charge_level")
-            .map(|s| s.to_str().unwrap().parse::<u16>().unwrap() * 100 / 255)
+            .map(str_to_percent)
     }
 
     pub fn get_charge_status(&self) -> Option<bool> {
@@ -151,14 +151,14 @@ impl RazerDevice {
     pub fn get_low_battery_threshold(&self) -> Option<u16> {
         self.udev_device
             .attribute_value("charge_low_threshold")
-            .map(|s| s.to_str().unwrap().parse::<u16>().unwrap() * 100 / 255)
+            .map(str_to_percent)
     }
 
     pub fn set_low_battery_threshold(&mut self, low_battery_threshold: u16) {
-        let low_percent = low_battery_threshold * 255 / 100;
-        let _ = self
-            .udev_device
-            .set_attribute_value("charge_low_threshold", low_percent.to_string());
+        let _ = self.udev_device.set_attribute_value(
+            "charge_low_threshold",
+            percent_to_str(low_battery_threshold),
+        );
     }
 
     pub fn get_idle_time(&self) -> Option<u16> {
@@ -247,6 +247,14 @@ fn get_vendor_id_device_id(sysname: &str) -> (u16, u16) {
     let device_id_str = parts.next().unwrap().split('.').next().unwrap();
     let device_id = u16::from_str_radix(device_id_str, 16).unwrap();
     (vendor_id, device_id)
+}
+
+fn str_to_percent(s: &OsStr) -> u16 {
+    (s.to_str().unwrap().parse::<f32>().unwrap() * 100.0 / 255.0).round() as u16
+}
+
+fn percent_to_str(x: u16) -> String {
+    (((x as f32) * 255.0 / 100.0) as u16).to_string()
 }
 
 fn split_xy(xy_str: &OsStr) -> Option<(u16, u16)> {

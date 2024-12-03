@@ -33,7 +33,7 @@ pub struct Args {
 
     /// Print syspath
     #[arg(short, long)]
-    syspath: bool
+    syspath: bool,
 }
 
 impl Args {
