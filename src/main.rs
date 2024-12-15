@@ -35,7 +35,9 @@ fn main() {
 
     if args.list() {
         for device in devices {
-            print_everything(&device);
+            if device.get_type() != DeviceType::Unknown {
+                print_everything(&device);
+            }
         }
     }
 }

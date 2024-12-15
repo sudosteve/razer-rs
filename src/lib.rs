@@ -1,15 +1,17 @@
+use std::cmp::max;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::{thread, time};
 use std::vec::Vec;
 
 mod devices;
 
 const RAZER_VENDOR_ID: u16 = 0x1532;
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, PartialEq)]
 pub enum DeviceType {
     #[default]
     Unknown,
@@ -29,6 +31,25 @@ pub struct DeviceCapabilities {
     pub dpi_stages: bool,
     pub poll_rate: bool,
     pub battery: bool, // TODO: Might need to add low_threshold and idle_delay
+}
+
+pub fn get_raw_attribute_value<P: AsRef<Path>>(udev_device: &udev::Device, attr: P) -> Option<Vec<u8>> {
+    let mut result = Vec::new();
+    let path = Path::new(udev_device.syspath()).join(attr);
+    let mut file = File::options().read(true).open(path).ok()?;
+    let bytes_read = file.read_to_end(&mut result).ok()?;
+    assert!(bytes_read == result.len());
+    Some(result)
+}
+
+fn set_raw_attribute_value<P: AsRef<Path>>(udev_device: &udev::Device, attr: P, value: &[u8]) {
+    let path = Path::new(udev_device.syspath()).join(attr);
+    if let Ok(mut f) = File::options().write(true).open(&path) {
+        println!("Writing {:?} to {:?}", value, &path);
+        f.write_all(value).expect("Failed to write to file");
+    } else {
+        println!("Failed to write raw value for attribute");
+    }
 }
 
 pub struct RazerDevice {
@@ -73,13 +94,13 @@ impl RazerDevice {
         if self.device_capabilities.as_ref().is_some_and(|d| !d.dpi) {
             return;
         }
-        self.set_raw_attribute_value("dpi", &dpi.to_be_bytes());
+        set_raw_attribute_value(&self.udev_device, "dpi", &dpi.to_be_bytes());
     }
 
     pub fn set_dpi_xy(&mut self, dpi_x: u16, dpi_y: u16) {
         let mut byte_vec = dpi_x.to_be_bytes().to_vec();
         byte_vec.append(&mut dpi_y.to_be_bytes().to_vec());
-        self.set_raw_attribute_value("dpi", &byte_vec);
+        set_raw_attribute_value(&self.udev_device, "dpi", &byte_vec);
     }
 
     pub fn get_max_dpi(&self) -> Option<u16> {
@@ -94,7 +115,7 @@ impl RazerDevice {
         {
             return None;
         }
-        self.get_raw_attribute_value("dpi_stages").map(|v| {
+        get_raw_attribute_value(&self.udev_device, "dpi_stages").map(|v| {
             let mut stages: Vec<(u16, u16)> = Vec::with_capacity((v.len() - 1) / 4);
             let active_stage = v[0];
             let mut bytes = &v[1..];
@@ -173,22 +194,6 @@ impl RazerDevice {
             .set_attribute_value("device_idle_time", idle_time.to_string());
     }
 
-    pub fn get_raw_attribute_value<P: AsRef<Path>>(&self, attr: P) -> Option<Vec<u8>> {
-        let mut result = Vec::new();
-        let path = Path::new(self.udev_device.syspath()).join(attr);
-        let mut file = File::options().read(true).open(path).ok()?;
-        let bytes_read = file.read_to_end(&mut result).ok()?;
-        assert!(bytes_read == result.len());
-        Some(result)
-    }
-
-    fn set_raw_attribute_value<P: AsRef<Path>>(&self, attr: P, value: &[u8]) {
-        let path = Path::new(self.udev_device.syspath()).join(attr);
-        if let Ok(mut f) = File::options().write(true).open(path) {
-            f.write_all(value).expect("Failed to write to file");
-        }
-    }
-
     // pub fn get_lighting_options(&self) -> (BTreeSet<String>, BTreeSet<String>) {
     //     let mut regions = BTreeSet::new();
     //     let mut effects = BTreeSet::new();
@@ -225,9 +230,11 @@ pub fn get_devices() -> Vec<RazerDevice> {
         if vendor_id == RAZER_VENDOR_ID {
             if let Some(device_name) = device.attribute_value("device_type") {
                 let name = String::from(device_name.to_str().unwrap());
-                let device_capabilities = devices::get_device_capabilities(device_id);
+                let mut device_capabilities = devices::get_device_capabilities(device_id);
                 if device_capabilities.is_some() {
                     assert!(device_capabilities.as_ref().unwrap().name == name);
+                } else {
+                    device_capabilities = Some(guess_capabilities(&device));
                 }
                 result.push(RazerDevice {
                     name,
@@ -238,6 +245,66 @@ pub fn get_devices() -> Vec<RazerDevice> {
         }
     }
     result
+}
+
+pub fn guess_capabilities(udev_device: &udev::Device) -> DeviceCapabilities {
+    let maybe_dpi = udev_device.attribute_value("dpi");
+    let dpi = maybe_dpi.is_some();
+    let dpi_use_xy = dpi && maybe_dpi.unwrap().to_str().unwrap().contains(":");
+    let max_dpi = None;
+    let dpi_stages = udev_device.attribute_value("dpi_stages").is_some();
+
+    let poll_rate = udev_device.attribute_value("poll_rate").is_some();
+
+    let battery = udev_device.attribute_value("charge_level").is_some();
+
+    DeviceCapabilities {
+        name: "UNKNOWM", // can't set static lifetimed to found name
+        device_type: DeviceType::Mouse,
+        dpi,
+        dpi_use_xy,
+        max_dpi,
+        dpi_stages,
+        poll_rate,
+        battery,
+    }
+}
+
+// This would work except my Razer DeathAdder v3 Hyperspeed does not read back
+// the value that I just wrote to it until this program closes.
+fn _find_max_dpi(udev_device: &udev::Device, dpi_use_xy: bool) -> u16 {
+    let dpi = udev_device.attribute_value("dpi").unwrap().to_str().unwrap().split(':').next().unwrap().parse::<u16>().unwrap();
+    let mut tmp_dpi: u16 = 1100;
+    let mut max_dpi: u16 = tmp_dpi;
+    let mut increment: u16 = 100;
+    loop {
+        let mut byte_vec = tmp_dpi.to_be_bytes().to_vec();
+        if dpi_use_xy {
+            byte_vec.append(&mut tmp_dpi.to_be_bytes().to_vec());
+        }
+        set_raw_attribute_value(udev_device, "dpi", &byte_vec);
+
+        let ten_millis = time::Duration::from_millis(100);
+        thread::sleep(ten_millis);
+
+        let dpi_str: Option<&OsStr> = udev_device.attribute_value("dpi");
+        let read_dpi = dpi_str.unwrap().to_str().unwrap().split(':').next().unwrap().parse::<u16>().unwrap();
+        max_dpi = max(max_dpi, read_dpi);
+        println!("Set DPI to: {}. Read DPI as {}", tmp_dpi, read_dpi);
+        if max_dpi < tmp_dpi {
+            println!("Found max: {}", max_dpi);
+            byte_vec = dpi.to_be_bytes().to_vec();
+            if dpi_use_xy {
+                byte_vec.append(&mut dpi.to_be_bytes().to_vec());
+            }
+            set_raw_attribute_value(udev_device, "dpi", &byte_vec);
+            return max_dpi;
+        }
+        if tmp_dpi == 10000 {
+            increment = 1000;
+        }
+        tmp_dpi += increment;
+    }
 }
 
 fn get_vendor_id_device_id(sysname: &str) -> (u16, u16) {
